@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import torch.utils.tensorboard as tb
 
-from .models import ClassificationLoss, load_model, save_model
+from models import ClassificationLoss, load_model, save_model
 from .utils import load_data
 
 
@@ -36,7 +36,7 @@ def train(
     logger = tb.SummaryWriter(log_dir)
 
     # note: the grader uses default kwargs, you'll have to bake them in for the final submission
-    model = load_model(model_name, **kwargs)
+    model = load_model(model_name, **kwargs) # TO DO
     model = model.to(device)
     model.train()
 
@@ -44,8 +44,8 @@ def train(
     val_data = load_data("classification_data/val", shuffle=False)
 
     # create loss function and optimizer
-    loss_func = ClassificationLoss()
-    optimizer = torch.optim.SGD(model.parameters(),lr=lr)
+    loss_func = ClassificationLoss() # TO DO
+    optimizer = torch.optim.SGD(model.parameters(),lr=lr) # TO DO
 
     global_step = 0
     metrics = {"train_acc": [], "val_acc": []}

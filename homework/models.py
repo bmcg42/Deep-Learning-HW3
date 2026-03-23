@@ -13,6 +13,9 @@ class Classifier(nn.Module):
         self,
         in_channels: int = 3,
         num_classes: int = 6,
+        k_size: int = 3,
+        first_layer_channels: int = 128,
+        number_of_blocks: int = 3
     ):
         """
         A convolutional network for image classification.
@@ -26,8 +29,17 @@ class Classifier(nn.Module):
         self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN))
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
-        # TODO: implement
-        pass
+        # Add first layer
+        network = [torch.nn.Conv2d(in_channels,first_layer_channels,k_size)]
+
+        # Add blocks
+        # for _ in range(number_of_blocks):
+        #   network.append(self.blocks())
+
+        # Add 1x1 conv as classifier
+
+        # Add GAP for selection
+        
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
