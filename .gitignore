@@ -1,0 +1,6 @@
+# Ignore classification data
+classification_data/
+classification_data.zip
+# Ignore detection data
+drive_data/
+drive_data.zip
