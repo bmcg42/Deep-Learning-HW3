@@ -59,8 +59,12 @@ class Classifier(nn.Module):
           c1 = c2
 
         # Add 1x1 conv as classifier
+        network.append(torch.nn.Conv2d(c1,num_classes,1))
 
         # Add GAP for selection
+        network.append(torch.nn.AdaptiveAvgPool2d((1, 1)))
+
+        self.ConvNet = torch.nn.Sequential(network)
         
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -75,7 +79,8 @@ class Classifier(nn.Module):
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
 
         # TODO: replace with actual forward pass
-        logits = torch.randn(x.size(0), 6)
+        logits = self.ConvNet(z)
+        logits = torch.flatten(logits,1)
 
         return logits
 
