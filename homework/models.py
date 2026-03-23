@@ -9,13 +9,32 @@ INPUT_STD = [0.2064, 0.1944, 0.2252]
 
 
 class Classifier(nn.Module):
+    class Block(torch.nn.module):
+      def __init__(self,input_c,output_c,k_size,stride,n_conv):
+        super.__init__()
+        padding = (k_size - 1) // 2
+        layers = []
+        for _ in range(n_conv): # Can adjust while training
+          layers.append(
+            torch.nn.Conv2d(input_c,output_c,k_size,stride,padding),
+            torch.nn.ReLU()
+          )
+          input_c = output_c
+        
+        self.block = torch.nn.Sequential(layers)
+
+      def forward(self,x):
+        return self.block(x)
+
+
     def __init__(
         self,
         in_channels: int = 3,
         num_classes: int = 6,
         k_size: int = 3,
-        first_layer_channels: int = 128,
-        number_of_blocks: int = 3
+        init_channels: int = 16,
+        n_blocks: int = 3,
+        n_conv: int = 1
     ):
         """
         A convolutional network for image classification.
@@ -30,11 +49,14 @@ class Classifier(nn.Module):
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
         # Add first layer
-        network = [torch.nn.Conv2d(in_channels,first_layer_channels,k_size)]
+        network = [torch.nn.Conv2d(in_channels,init_channels,k_size)]
 
         # Add blocks
-        # for _ in range(number_of_blocks):
-        #   network.append(self.blocks())
+        c1 = init_channels
+        for _ in range(n_blocks):
+          c2 = c1*2
+          network.append(self.Block(c1,c2))
+          c1 = c2
 
         # Add 1x1 conv as classifier
 
