@@ -41,9 +41,9 @@ class Classifier(nn.Module):
         num_classes: int = 6,
         k_size: int = 3,
         init_channels: int = 16,
-        n_conv: int = 1,
-        n_stages: int = 3,
-        stage_size: int = 1
+        n_conv: int = 3, # Number of convolutions per block
+        n_stages: int = 3, # Number of stages (Channels increase by 2x at each stage)
+        stage_size: int = 1 # Number of convolutions per block
     ):
         """
         A convolutional network for image classification.
