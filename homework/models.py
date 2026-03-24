@@ -9,7 +9,7 @@ INPUT_STD = [0.2064, 0.1944, 0.2252]
 
 
 class Classifier(nn.Module):
-    class Block(torch.nn.module):
+    class Block(torch.nn.Module):
       def __init__(self,input_c,output_c,k_size,stride,n_conv):
         super().__init__()
         self.relu = torch.nn.ReLU()
@@ -59,7 +59,7 @@ class Classifier(nn.Module):
 
         # Add first layer
         network = [
-          torch.nn.Conv2d(in_channels,init_channels,k_size padding=(k_size-1)//2),
+          torch.nn.Conv2d(in_channels,init_channels,k_size,padding=(k_size-1)//2),
           torch.nn.ReLU()
           ]
 
