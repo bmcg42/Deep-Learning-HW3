@@ -149,7 +149,8 @@ class Detector(torch.nn.Module):
           in_c = input_c
           for i in range(n_conv): # Can adjust while training
             s = stride if i == 0 else 1 # only upsample at first conv
-            layers.append(torch.nn.ConvTranspose2d(in_c,output_c,k_size,s,padding))
+            layers.append(torch.nn.ConvTranspose2d(in_c,output_c,k_size,s,padding,
+            output_padding=1))
             layers.append(torch.nn.ReLU())
             in_c = output_c
           
@@ -196,6 +197,7 @@ class Detector(torch.nn.Module):
 
         self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN))
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
+        self.output_size = (96,128)
 
         # Add first layer
         self.init_lyr = nn.Sequential(*[
@@ -270,7 +272,6 @@ class Detector(torch.nn.Module):
           z = out
 
         # Go through up samples and add in skip where 
-        print(len(skip_stack))
         for i, s in enumerate(self.up_stages):
           out = s(z)
           # Add in skip

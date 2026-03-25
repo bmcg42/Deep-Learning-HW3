@@ -17,6 +17,8 @@ import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 from .metrics import ConfusionMatrix  # Provided
 
+import torch.nn.functional as F
+
 def train(
     exp_dir: str = "detector_logs",
     model_name: str = "detector",
@@ -54,14 +56,15 @@ def train(
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
     global_step = 0
-
+    conf_matrix = ConfusionMatrix(num_classes=3)  # segmentation classes
+    val_conf_matrix = ConfusionMatrix(num_classes=3)
     for epoch in range(num_epoch):
         model.train()
         train_loss = 0.0
-        conf_matrix = ConfusionMatrix(num_classes=3)  # segmentation classes
         depth_mae_total = 0.0
         lane_mae_total = 0.0
         count = 0
+        conf_matrix.reset()
 
         for data_dict in train_data:
             img = data_dict['image'].to(device)
@@ -71,7 +74,7 @@ def train(
             optimizer.zero_grad()
             seg_logits, depth_pred = model(img)
             depth_pred = depth_pred.squeeze(1)
-
+            
             # combined loss
             loss = seg_loss_fn(seg_logits, seg_labels) + l * depth_loss_fn(depth_pred, depth_target)
             loss.backward()
@@ -80,7 +83,7 @@ def train(
 
             # update metrics
             pred_labels = torch.argmax(seg_logits, dim=1)
-            conf_matrix.update(pred_labels.cpu().numpy(), seg_labels.cpu().numpy())
+            conf_matrix.add(pred_labels, seg_labels)
 
             lane_mask = (seg_labels > 0)
             if lane_mask.any():
@@ -92,28 +95,29 @@ def train(
 
         # epoch metrics
         epoch_loss = train_loss / len(train_data.dataset)
-        train_miou = conf_matrix.iou().mean()
+        train_lane = conf_matrix.compute()
+        train_miou = train_lane['iou']
+        train_acc = train_lane['accuracy']
         train_depth_mae = depth_mae_total / count
-        train_lane_mae = lane_mae_total / count
 
         logger.add_scalar('train_loss', epoch_loss, epoch)
         logger.add_scalar('train_mIoU', train_miou, epoch)
         logger.add_scalar('train_depth_MAE', train_depth_mae, epoch)
-        logger.add_scalar('train_lane_MAE', train_lane_mae, epoch)
+        logger.add_scalar('train_accuracy', train_acc, epoch)
 
         # validation
         model.eval()
         val_loss = 0.0
-        val_conf_matrix = ConfusionMatrix(num_classes=3)
+        val_conf_matrix.reset()
         val_depth_mae_total = 0.0
         val_lane_mae_total = 0.0
         val_count = 0
 
         with torch.inference_mode():
-            for img, label in val_data:
-                img = img.to(device)
-                seg_labels = label[0].to(device)
-                depth_target = label[1].to(device)
+            for data_dict in val_data:
+                img = data_dict['image'].to(device)
+                seg_labels = data_dict['track'].to(device)
+                depth_target = data_dict['depth'].to(device)
 
                 seg_logits, depth_pred = model(img)
                 depth_pred = depth_pred.squeeze(1)
@@ -121,7 +125,7 @@ def train(
                 val_loss += loss.item() * img.size(0)
 
                 pred_labels = torch.argmax(seg_logits, dim=1)
-                val_conf_matrix.update(pred_labels.cpu().numpy(), seg_labels.cpu().numpy())
+                val_conf_matrix.add(pred_labels, seg_labels)
 
                 lane_mask = (seg_labels > 0)
                 if lane_mask.any():
@@ -130,18 +134,22 @@ def train(
                 val_count += img.size(0) * img.shape[2] * img.shape[3]
 
         val_epoch_loss = val_loss / len(val_data.dataset)
-        val_miou = val_conf_matrix.iou().mean()
+        val_lane = val_conf_matrix.compute()
+        val_miou = val_lane['iou']
+        val_acc = val_lane['accuracy']
         val_depth_mae = val_depth_mae_total / val_count
         val_lane_mae = val_lane_mae_total / val_count
 
         logger.add_scalar('val_loss', val_epoch_loss, epoch)
         logger.add_scalar('val_mIoU', val_miou, epoch)
         logger.add_scalar('val_depth_MAE', val_depth_mae, epoch)
-        logger.add_scalar('val_lane_MAE', val_lane_mae, epoch)
+        logger.add_scalar('val_acc', val_acc, epoch)
 
-        print(f"Epoch {epoch+1:2d}/{num_epoch:2d} | "
-              f"Train Loss: {epoch_loss:.4f} | mIoU: {train_miou:.3f} | Depth MAE: {train_depth_mae:.4f} | Lane MAE: {train_lane_mae:.4f} || "
-              f"Val Loss: {val_epoch_loss:.4f} | mIoU: {val_miou:.3f} | Depth MAE: {val_depth_mae:.4f} | Lane MAE: {val_lane_mae:.4f}")
+        # print on first, last, every 10th epoch
+        if epoch == 0 or epoch == num_epoch - 1 or (epoch + 1) % (num_epoch/10) == 0:
+          print(f"Epoch {epoch+1:2d}/{num_epoch:2d} | "
+              f"mIoU: {train_miou:.3f} | Depth MAE: {train_depth_mae:.4f} | Lane Acc: {train_acc:.4f} || "
+              f"mIoU: {val_miou:.3f} | Depth MAE: {val_depth_mae:.4f} | Lane Acc: {val_acc:.4f}")
 
     # save model
     save_model(model)
