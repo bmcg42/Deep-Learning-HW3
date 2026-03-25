@@ -120,10 +120,61 @@ class Classifier(nn.Module):
 
 
 class Detector(torch.nn.Module):
+    class downBlock(torch.nn.Module):
+        def __init__(self,input_c,output_c,k_size,stride,n_conv):
+          super().__init__()
+          self.relu = torch.nn.ReLU()
+          padding = (k_size - 1) // 2
+          layers = []
+          in_c = input_c
+          for i in range(n_conv): # Can adjust while training
+            s = stride if i == 0 else 1 # only downsample at first conv
+            layers.append(torch.nn.Conv2d(in_c,output_c,k_size,s,padding))
+            layers.append(torch.nn.ReLU())
+            in_c = output_c
+          
+          self.block = torch.nn.Sequential(*layers)
+
+          if input_c != output_c or stride != 1:
+              self.proj = nn.Conv2d(input_c, output_c, kernel_size=1, stride=stride)
+          else:
+              self.proj = nn.Identity()
+
+
+    class upBlock(torch.nn.Module):
+        def __init__(self,input_c,output_c,k_size,stride,n_conv):
+          super().__init__()
+          self.relu = torch.nn.ReLU()
+          padding = (k_size - 1) // 2
+          layers = []
+          in_c = input_c
+          for i in range(n_conv): # Can adjust while training
+            s = stride if i == 0 else 1 # only upsample at first conv
+            layers.append(torch.nn.ConvTranspose2d(in_c,output_c,k_size,s,padding))
+            layers.append(torch.nn.ReLU())
+            in_c = output_c
+          
+          self.block = torch.nn.Sequential(*layers)
+
+          if input_c != output_c or stride != 1:
+              self.proj = nn.Conv2d(input_c, output_c, kernel_size=1, stride=stride)
+          else:
+              self.proj = nn.Identity()
+
+
+        def forward(self,x):
+          # Add non-linearity after linear combo
+          return self.relu(self.block(x) + self.proj(x))
+
     def __init__(
         self,
         in_channels: int = 3,
-        num_classes: int = 3,
+        num_classes: int = 6,
+        k_size: int = 3,
+        init_channels: int = 16,
+        n_conv: int = 3, # Number of convolutions per block
+        n_stages: int = 3, # Number of stages (Channels increase by 2x at each stage)
+        stage_size: int = 1 # Number of convolutions per block
     ):
         """
         A single model that performs segmentation and depth regression
@@ -137,8 +188,59 @@ class Detector(torch.nn.Module):
         self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN))
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
-        # TODO: implement
-        pass
+        # Add first layer
+        network = [
+          torch.nn.Conv2d(in_channels,init_channels,k_size,padding=(k_size-1)//2),
+          torch.nn.ReLU()
+          ]
+
+        # Add down sampling blocks
+        self.down_stages = torch.nn.ModuleList([])
+        c1 = init_channels
+        for _ in range(n_stages):
+          stage = []
+          c2 = c1*2
+          # first block in stage, increase channels + reduce resolution
+          stage.append(self.downBlock(c1, c2, k_size,
+           stride = 2, n_conv = n_conv))
+
+          # remaining blocks, consistent channels and resolution
+          for _ in range(stage_size - 1):
+              stage.append(self.downBlock(c2, c2, k_size, 1, n_conv))
+          
+          # Next stage input size
+          c1 = c2
+          # Add to module list
+          self.down_stages.append(nn.Sequential(*stage))
+
+        # add up sampling blocks
+        self.up_stages = torch.nn.ModuleList([])
+        for _ in range(n_stages):
+          stage = []
+          c2 = c1/2
+          # first block in stage, reduce channels + increase resolution
+          stage.append(self.upBlock(c1, c2, k_size,
+           stride = 2, n_conv = n_conv))
+
+          # remaining blocks, consistent channels and resolution
+          for _ in range(stage_size - 1):
+              stage.append(self.upBlock(c2, c2, k_size, 1, n_conv))
+          
+          # Next stage input size
+          c1 = c2
+          # Add to module list
+          self.up_stages.append(nn.Sequential(*stage))
+
+        # Add classifier head
+        self.seg_head = nn.Sequential(*
+          [torch.nn.Conv2d(c1,num_classes,1),# Add 1x1 conv as classifier
+          torch.nn.AdaptiveAvgPool2d((1, 1))] # Add GAP for selection
+        )
+        # Add depth head
+        self.depth_head = nn.Sequential(*
+          [torch.nn.Conv2d(c1,num_classes,1),# Add 1x1 conv as classifier
+          torch.nn.AdaptiveAvgPool2d((1, 1))] # Add GAP for selection
+        )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
