@@ -10,115 +10,141 @@ from .models import load_model, save_model
 from .utils import load_data
 
 
+from pathlib import Path
+from datetime import datetime
+import torch
+import numpy as np
+from torch.utils.tensorboard import SummaryWriter
+from .datasets.road_dataset import ConfusionMatrix  # Provided
+
 def train(
-    exp_dir: str = "classifier_logs",
-    model_name: str = "linear",
-    l = 1.0, # lambda
-    lr: int = 0.001,
+    exp_dir: str = "detector_logs",
+    model_name: str = "detector",
+    l = 1.0, # lambda for depth loss
+    lr: float = 0.001,
     num_epoch: int = 50,
     batch_size: int = 128,
     seed: int = 2024,
     **kwargs,
 ):
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-    elif torch.backends.mps.is_available() and torch.backends.mps.is_built():
-        device = torch.device("mps")
-    else:
-        print("CUDA not available, using CPU")
-        device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else
+                          "mps" if torch.backends.mps.is_available() and torch.backends.mps.is_built() else
+                          "cpu")
+    print(f"Using device: {device}")
 
-    # set random seed so each run is deterministic
+    # deterministic
     torch.manual_seed(seed)
     np.random.seed(seed)
 
-    # directory with timestamp to save tensorboard logs and model checkpoints
+    # tensorboard log directory
     log_dir = Path(exp_dir) / f"{model_name}_{datetime.now().strftime('%m%d_%H%M%S')}"
-    logger = tb.SummaryWriter(log_dir)
+    logger = SummaryWriter(log_dir)
 
-    # note: the grader uses default kwargs, you'll have to bake them in for the final submission
-    model = load_model(model_name, **kwargs) # TO DO
+    # model
+    model = load_model(model_name, **kwargs)
     model = model.to(device)
-    model.train()
 
+    # data loaders
     train_data = load_data("drive_data/train", shuffle=True, batch_size=batch_size, num_workers=2)
-    val_data = load_data("drive_data/val", shuffle=False)
+    val_data = load_data("drive_data/val", shuffle=False, batch_size=batch_size, num_workers=2)
 
-    # create loss function and optimizer
-    # Segmentation loss (multi-class per-pixel)
-    seg_loss_fn = torch.nn.CrossEntropyLoss() 
-
-    # Depth loss (regression per-pixel)
+    # loss functions
+    seg_loss_fn = torch.nn.CrossEntropyLoss()
     depth_loss_fn = torch.nn.L1Loss()
-    optimizer = torch.optim.AdamW(model.parameters(),lr=lr) # TO DO
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
     global_step = 0
-    metrics = {"train_acc": [], "val_acc": []}
 
-    # training loop
     for epoch in range(num_epoch):
-        # clear metrics at beginning of epoch
-        for key in metrics:
-            metrics[key].clear()
-
         model.train()
+        train_loss = 0.0
+        conf_matrix = ConfusionMatrix(num_classes=3)  # segmentation classes
+        depth_mae_total = 0.0
+        lane_mae_total = 0.0
+        count = 0
 
         for img, label in train_data:
-            img, label = img.to(device), label.to(device)
+            img = img.to(device)
+            seg_labels = label[0].to(device)   # (B,H,W)
+            depth_target = label[1].to(device) # (B,H,W)
 
-            # Make prediction
-            seg,depth = model(img) 
-            depth = depth.squeeze(1)
+            optimizer.zero_grad()
+            seg_logits, depth_pred = model(img)
+            depth_pred = depth_pred.squeeze(1)
 
-            # Calculate gradient and update params
-            optimizer.zero_grad() # Zero out gradient
-            loss = seg_loss_fn(seg,label[0]) + l * depth_loss_fn(depth,label[1]) # Calculate loss
-            loss.backward() # Calculate gradient
-            optimizer.step() # Update parameters
+            # combined loss
+            loss = seg_loss_fn(seg_logits, seg_labels) + l * depth_loss_fn(depth_pred, depth_target)
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item() * img.size(0)
 
-            # Calculate accuracy
-            pred_labels = out.argmax(dim=1)
-            metrics['train_acc'].append(
-                (pred_labels==label).float().mean().item()
-            )
+            # update metrics
+            pred_labels = torch.argmax(seg_logits, dim=1)
+            conf_matrix.update(pred_labels.cpu().numpy(), seg_labels.cpu().numpy())
+
+            lane_mask = (seg_labels > 0)
+            if lane_mask.any():
+                lane_mae_total += torch.abs(depth_pred - depth_target)[lane_mask].sum().item()
+            depth_mae_total += torch.abs(depth_pred - depth_target).sum().item()
+            count += img.size(0) * img.shape[2] * img.shape[3]  # total pixels
 
             global_step += 1
 
-        # disable gradient computation and switch to evaluation mode
+        # epoch metrics
+        epoch_loss = train_loss / len(train_data.dataset)
+        train_miou = conf_matrix.iou().mean()
+        train_depth_mae = depth_mae_total / count
+        train_lane_mae = lane_mae_total / count
+
+        logger.add_scalar('train_loss', epoch_loss, epoch)
+        logger.add_scalar('train_mIoU', train_miou, epoch)
+        logger.add_scalar('train_depth_MAE', train_depth_mae, epoch)
+        logger.add_scalar('train_lane_MAE', train_lane_mae, epoch)
+
+        # validation
+        model.eval()
+        val_loss = 0.0
+        val_conf_matrix = ConfusionMatrix(num_classes=3)
+        val_depth_mae_total = 0.0
+        val_lane_mae_total = 0.0
+        val_count = 0
+
         with torch.inference_mode():
-            model.eval()
-
             for img, label in val_data:
-                img, label = img.to(device), label.to(device)
+                img = img.to(device)
+                seg_labels = label[0].to(device)
+                depth_target = label[1].to(device)
 
-                # Make prediction
-                out = model(img) 
+                seg_logits, depth_pred = model(img)
+                depth_pred = depth_pred.squeeze(1)
+                loss = seg_loss_fn(seg_logits, seg_labels) + l * depth_loss_fn(depth_pred, depth_target)
+                val_loss += loss.item() * img.size(0)
 
-                # Calculate accuracy
-                pred_labels = out.argmax(dim=1)
-                metrics['val_acc'].append(
-                    (pred_labels==label).float().mean().item()
-                )
+                pred_labels = torch.argmax(seg_logits, dim=1)
+                val_conf_matrix.update(pred_labels.cpu().numpy(), seg_labels.cpu().numpy())
 
-        # log average train and val accuracy to tensorboard
-        epoch_train_acc = torch.as_tensor(metrics["train_acc"]).mean()
-        epoch_val_acc = torch.as_tensor(metrics["val_acc"]).mean()
+                lane_mask = (seg_labels > 0)
+                if lane_mask.any():
+                    val_lane_mae_total += torch.abs(depth_pred - depth_target)[lane_mask].sum().item()
+                val_depth_mae_total += torch.abs(depth_pred - depth_target).sum().item()
+                val_count += img.size(0) * img.shape[2] * img.shape[3]
 
-        logger.add_scalar('train_accuracy',epoch_train_acc,global_step)
-        logger.add_scalar('val_accuracy',epoch_val_acc,global_step)
+        val_epoch_loss = val_loss / len(val_data.dataset)
+        val_miou = val_conf_matrix.iou().mean()
+        val_depth_mae = val_depth_mae_total / val_count
+        val_lane_mae = val_lane_mae_total / val_count
 
-        # print on first, last, every 10th epoch
-        if epoch == 0 or epoch == num_epoch - 1 or (epoch + 1) % (num_epoch/10) == 0:
-            print(
-                f"Epoch {epoch + 1:2d} / {num_epoch:2d}: "
-                f"train_acc={epoch_train_acc:.4f} "
-                f"val_acc={epoch_val_acc:.4f}"
-            )
+        logger.add_scalar('val_loss', val_epoch_loss, epoch)
+        logger.add_scalar('val_mIoU', val_miou, epoch)
+        logger.add_scalar('val_depth_MAE', val_depth_mae, epoch)
+        logger.add_scalar('val_lane_MAE', val_lane_mae, epoch)
 
-    # save and overwrite the model in the root directory for grading
+        print(f"Epoch {epoch+1:2d}/{num_epoch:2d} | "
+              f"Train Loss: {epoch_loss:.4f} | mIoU: {train_miou:.3f} | Depth MAE: {train_depth_mae:.4f} | Lane MAE: {train_lane_mae:.4f} || "
+              f"Val Loss: {val_epoch_loss:.4f} | mIoU: {val_miou:.3f} | Depth MAE: {val_depth_mae:.4f} | Lane MAE: {val_lane_mae:.4f}")
+
+    # save model
     save_model(model)
-
-    # save a copy of model weights in the log directory
     torch.save(model.state_dict(), log_dir / f"{model_name}.th")
     print(f"Model saved to {log_dir / f'{model_name}.th'}")
 
