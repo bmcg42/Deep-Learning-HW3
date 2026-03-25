@@ -189,10 +189,10 @@ class Detector(torch.nn.Module):
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
         # Add first layer
-        network = [
+        self.init_lyr = nn.Sequential(*[
           torch.nn.Conv2d(in_channels,init_channels,k_size,padding=(k_size-1)//2),
           torch.nn.ReLU()
-          ]
+          ])
 
         # Add down sampling blocks
         self.down_stages = torch.nn.ModuleList([])
@@ -217,7 +217,7 @@ class Detector(torch.nn.Module):
         self.up_stages = torch.nn.ModuleList([])
         for _ in range(n_stages):
           stage = []
-          c2 = c1/2
+          c2 = c1 // 2
           # first block in stage, reduce channels + increase resolution
           stage.append(self.upBlock(c1, c2, k_size,
            stride = 2, n_conv = n_conv))
@@ -232,15 +232,9 @@ class Detector(torch.nn.Module):
           self.up_stages.append(nn.Sequential(*stage))
 
         # Add classifier head
-        self.seg_head = nn.Sequential(*
-          [torch.nn.Conv2d(c1,num_classes,1),# Add 1x1 conv as classifier
-          torch.nn.AdaptiveAvgPool2d((1, 1))] # Add GAP for selection
-        )
+        self.seg_head = nn.Conv2d(c1, num_classes, 1)  # output: (B, num_classes, H, W)
         # Add depth head
-        self.depth_head = nn.Sequential(*
-          [torch.nn.Conv2d(c1,num_classes,1),# Add 1x1 conv as classifier
-          torch.nn.AdaptiveAvgPool2d((1, 1))] # Add GAP for selection
-        )
+        self.depth_head = nn.Conv2d(c1, 1, 1)  # 1x1 conv, per-pixel depth
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -257,10 +251,31 @@ class Detector(torch.nn.Module):
         """
         # optional: normalizes the input
         z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
+        # Apply first layer
+        z = self.init_lyr(z)
+        # Go through down samples and save outputs for skip
+        skip_stack = []
+        for s in self.down_stages:
+          out = s(z)
+          skip_stack.append(out)
+          z = out
 
-        # TODO: replace with actual forward pass
-        logits = torch.randn(x.size(0), 3, x.size(2), x.size(3))
-        raw_depth = torch.rand(x.size(0), x.size(2), x.size(3))
+        # Go through up samples and add in skip where appropriate
+        for s in self.up_stages:
+          out = s(z)
+          # Add in skip
+          skip = skip_stack.pop()
+          # match spatial size if needed
+          if out.shape[-2:] != skip.shape[-2:]:
+              # crop/pad skip to match z
+              skip = self._crop_or_pad(skip, out.shape[-2:])
+          z = torch.cat([out, skip], dim=1)
+
+        # Apply sementic segmentation head
+        logits = self.seg_head(z)
+
+        # Apply regression head
+        raw_depth = self.depth_head(z)
 
         return logits, raw_depth
 
