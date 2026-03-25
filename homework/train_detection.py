@@ -15,7 +15,7 @@ from datetime import datetime
 import torch
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
-from .metrics import ConfusionMatrix  # Provided
+from .metrics import DetectionMetric  # Provided
 
 import torch.nn.functional as F
 
@@ -56,15 +56,15 @@ def train(
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
 
     global_step = 0
-    conf_matrix = ConfusionMatrix(num_classes=3)  # segmentation classes
-    val_conf_matrix = ConfusionMatrix(num_classes=3)
+    train_perf = DetectionMetric()
+    val_perf = DetectionMetric()
     for epoch in range(num_epoch):
         model.train()
         train_loss = 0.0
         depth_mae_total = 0.0
         lane_mae_total = 0.0
         count = 0
-        conf_matrix.reset()
+        train_perf.reset()
 
         for data_dict in train_data:
             img = data_dict['image'].to(device)
@@ -83,7 +83,8 @@ def train(
 
             # update metrics
             pred_labels = torch.argmax(seg_logits, dim=1)
-            conf_matrix.add(pred_labels, seg_labels)
+            train_perf.add(pred_labels, seg_labels,
+                            depth_pred,depth_target)
 
             lane_mask = (seg_labels > 0)
             if lane_mask.any():
@@ -94,21 +95,21 @@ def train(
             global_step += 1
 
         # epoch metrics
-        epoch_loss = train_loss / len(train_data.dataset)
-        train_lane = conf_matrix.compute()
-        train_miou = train_lane['iou']
-        train_acc = train_lane['accuracy']
-        train_depth_mae = depth_mae_total / count
+        train_dict = train_perf.compute()
+        train_acc = train_dict['accuracy']
+        train_IOU = train_dict['iou']
+        train_MAE = train_dict['abs_depth_error']
+        train_lane_MAE = train_dict['tp_depth_error']
 
-        logger.add_scalar('train_loss', epoch_loss, epoch)
-        logger.add_scalar('train_mIoU', train_miou, epoch)
-        logger.add_scalar('train_depth_MAE', train_depth_mae, epoch)
+        logger.add_scalar('train_mIoU', train_IOU, epoch)
+        logger.add_scalar('train_depth_MAE', train_MAE, epoch)
+        logger.add_scalar('train_lane_MAE',train_lane_MAE)
         logger.add_scalar('train_accuracy', train_acc, epoch)
 
         # validation
         model.eval()
         val_loss = 0.0
-        val_conf_matrix.reset()
+        val_perf.reset()
         val_depth_mae_total = 0.0
         val_lane_mae_total = 0.0
         val_count = 0
@@ -133,23 +134,22 @@ def train(
                 val_depth_mae_total += torch.abs(depth_pred - depth_target).sum().item()
                 val_count += img.size(0) * img.shape[2] * img.shape[3]
 
-        val_epoch_loss = val_loss / len(val_data.dataset)
-        val_lane = val_conf_matrix.compute()
-        val_miou = val_lane['iou']
-        val_acc = val_lane['accuracy']
-        val_depth_mae = val_depth_mae_total / val_count
-        val_lane_mae = val_lane_mae_total / val_count
+        val_dict = val_perf.compute()
+        val_acc = val_dict['accuracy']
+        val_IOU = val_dict['iou']
+        val_MAE = val_dict['abs_depth_error']
+        val_lane_MAE = val_dict['tp_depth_error']
 
-        logger.add_scalar('val_loss', val_epoch_loss, epoch)
-        logger.add_scalar('val_mIoU', val_miou, epoch)
-        logger.add_scalar('val_depth_MAE', val_depth_mae, epoch)
-        logger.add_scalar('val_acc', val_acc, epoch)
+        logger.add_scalar('val_mIoU', val_IOU, epoch)
+        logger.add_scalar('val_depth_MAE', val_MAE, epoch)
+        logger.add_scalar('val_lane_MAE',val_lane_MAE)
+        logger.add_scalar('val_accuracy', val_acc, epoch)
 
         # print on first, last, every 10th epoch
         if epoch == 0 or epoch == num_epoch - 1 or (epoch + 1) % (num_epoch/10) == 0:
           print(f"Epoch {epoch+1:2d}/{num_epoch:2d} | "
-              f"mIoU: {train_miou:.3f} | Depth MAE: {train_depth_mae:.4f} | Lane Acc: {train_acc:.4f} || "
-              f"mIoU: {val_miou:.3f} | Depth MAE: {val_depth_mae:.4f} | Lane Acc: {val_acc:.4f}")
+              f"Train - Acc: {train_acc:.2f} | IoU: {train_IOU:.3f} | Depth MAE: {train_MAE:.3f} | Lane Acc: {train_lane_MAE:.3f} || "
+              f"Val --- Acc: {val_acc:.2f} | IoU: {val_IOU:.3f} | Depth MAE: {val_MAE:.3f} | Lane Acc: {val_lane_MAE:.3f} || ")
 
     # save model
     save_model(model)
