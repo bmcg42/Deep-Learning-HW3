@@ -148,9 +148,14 @@ class Detector(torch.nn.Module):
           layers = []
           in_c = input_c
           for i in range(n_conv): # Can adjust while training
-            s = stride if i == 0 else 1 # only upsample at first conv
+            if i == 0:
+              s = stride 
+              op = 1
+            else:
+              s = 1 # only upsample at first conv
+              op = 0 # only output pad once
             layers.append(torch.nn.ConvTranspose2d(in_c,output_c,k_size,s,padding,
-            output_padding=1))
+            output_padding=op))
             layers.append(torch.nn.ReLU())
             in_c = output_c
           

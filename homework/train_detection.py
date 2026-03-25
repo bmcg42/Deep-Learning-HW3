@@ -148,9 +148,9 @@ def train(
 
         # print on first, last, every 10th epoch
         if epoch == 0 or epoch == num_epoch - 1 or (epoch + 1) % (num_epoch/10) == 0:
-          print(f"Epoch {epoch+1:2d}/{num_epoch:2d} | "
-              f"Train - Acc: {train_acc:.2f} | IoU: {train_IOU:.3f} | Depth MAE: {train_MAE:.3f} | Lane Acc: {train_lane_MAE:.3f} || ",
-              f"Val --- Acc: {val_acc:.2f} | IoU: {val_IOU:.3f} | Depth MAE: {val_MAE:.3f} | Lane Acc: {val_lane_MAE:.3f} || ")
+          print(f"Epoch {epoch+1:2d}/{num_epoch:2d} |>")
+          print(f">>>  Train - Acc: {train_acc:.2f} | IoU: {train_IOU:.3f} | Depth MAE: {train_MAE:.3f} | Lane MAE: {train_lane_MAE:.3f} || ")
+          print(f">>>  Val --- Acc: {val_acc:.2f} | IoU: {val_IOU:.3f} | Depth MAE: {val_MAE:.3f} | Lane MAE: {val_lane_MAE:.3f} || ")
 
     # save model
     save_model(model)
