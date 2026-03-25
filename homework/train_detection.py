@@ -7,7 +7,7 @@ import torch
 import torch.utils.tensorboard as tb
 
 from .models import load_model, save_model
-from .utils import load_data
+from .datasets.road_dataset import load_data
 
 
 from pathlib import Path
@@ -15,7 +15,7 @@ from datetime import datetime
 import torch
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
-from .datasets.road_dataset import ConfusionMatrix  # Provided
+from .metrics import ConfusionMatrix  # Provided
 
 def train(
     exp_dir: str = "detector_logs",
@@ -63,10 +63,10 @@ def train(
         lane_mae_total = 0.0
         count = 0
 
-        for img, label in train_data:
-            img = img.to(device)
-            seg_labels = label[0].to(device)   # (B,H,W)
-            depth_target = label[1].to(device) # (B,H,W)
+        for data_dict in train_data:
+            img = data_dict['image'].to(device)
+            seg_labels = data_dict['track'].to(device)
+            depth_target = data_dict['depth'].to(device)
 
             optimizer.zero_grad()
             seg_logits, depth_pred = model(img)

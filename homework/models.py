@@ -134,11 +134,10 @@ class Detector(torch.nn.Module):
             in_c = output_c
           
           self.block = torch.nn.Sequential(*layers)
-
-          if input_c != output_c or stride != 1:
-              self.proj = nn.Conv2d(input_c, output_c, kernel_size=1, stride=stride)
-          else:
-              self.proj = nn.Identity()
+        
+        def forward(self,x):
+          # Add non-linearity after linear combo
+          return self.block(x)
 
 
     class upBlock(torch.nn.Module):
@@ -155,16 +154,26 @@ class Detector(torch.nn.Module):
             in_c = output_c
           
           self.block = torch.nn.Sequential(*layers)
-
-          if input_c != output_c or stride != 1:
-              self.proj = nn.Conv2d(input_c, output_c, kernel_size=1, stride=stride)
-          else:
-              self.proj = nn.Identity()
-
-
+        
         def forward(self,x):
           # Add non-linearity after linear combo
-          return self.relu(self.block(x) + self.proj(x))
+          return self.block(x)
+
+    def _crop_or_pad(self, x, target_size):
+        _, _, h, w = x.shape
+        target_h, target_w = target_size
+        # Crop if larger
+        if h > target_h:
+            x = x[:, :, :target_h, :]
+        if w > target_w:
+            x = x[:, :, :, :target_w]
+        # Pad if smaller
+        if h < target_h or w < target_w:
+            pad_h = max(0, target_h - h)
+            pad_w = max(0, target_w - w)
+            x = torch.nn.functional.pad(x, (0, pad_w, 0, pad_h))
+        return x
+
 
     def __init__(
         self,
@@ -197,6 +206,7 @@ class Detector(torch.nn.Module):
         # Add down sampling blocks
         self.down_stages = torch.nn.ModuleList([])
         c1 = init_channels
+        skip_channels = []
         for _ in range(n_stages):
           stage = []
           c2 = c1*2
@@ -210,24 +220,23 @@ class Detector(torch.nn.Module):
           
           # Next stage input size
           c1 = c2
+          skip_channels.append(c2) # save channel size for up block init
           # Add to module list
           self.down_stages.append(nn.Sequential(*stage))
 
         # add up sampling blocks
         self.up_stages = torch.nn.ModuleList([])
-        for _ in range(n_stages):
+        c1 = skip_channels[-1]  # start with bottleneck
+        for i in range(n_stages):
           stage = []
-          c2 = c1 // 2
-          # first block in stage, reduce channels + increase resolution
-          stage.append(self.upBlock(c1, c2, k_size,
-           stride = 2, n_conv = n_conv))
-
+          skip_ch = skip_channels[-(i+1)]
+          c2 = c1 // 2 # Reduce channel size
+          stage.append(self.upBlock(c1, c2, k_size, stride=2, n_conv=n_conv))
           # remaining blocks, consistent channels and resolution
           for _ in range(stage_size - 1):
               stage.append(self.upBlock(c2, c2, k_size, 1, n_conv))
-          
-          # Next stage input size
-          c1 = c2
+          # Next stage input size include skip
+          c1 = c2 + skip_ch  # actual input to up block = prev stage out + skip
           # Add to module list
           self.up_stages.append(nn.Sequential(*stage))
 
@@ -260,11 +269,12 @@ class Detector(torch.nn.Module):
           skip_stack.append(out)
           z = out
 
-        # Go through up samples and add in skip where appropriate
-        for s in self.up_stages:
+        # Go through up samples and add in skip where 
+        print(len(skip_stack))
+        for i, s in enumerate(self.up_stages):
           out = s(z)
           # Add in skip
-          skip = skip_stack.pop()
+          skip = skip_stack[-(i+1)] 
           # match spatial size if needed
           if out.shape[-2:] != skip.shape[-2:]:
               # crop/pad skip to match z
