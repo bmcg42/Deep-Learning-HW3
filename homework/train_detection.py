@@ -126,7 +126,8 @@ def train(
                 val_loss += loss.item() * img.size(0)
 
                 pred_labels = torch.argmax(seg_logits, dim=1)
-                val_conf_matrix.add(pred_labels, seg_labels)
+                val_perf.add(pred_labels, seg_labels,
+                            depth_pred,depth_target)
 
                 lane_mask = (seg_labels > 0)
                 if lane_mask.any():
@@ -148,7 +149,7 @@ def train(
         # print on first, last, every 10th epoch
         if epoch == 0 or epoch == num_epoch - 1 or (epoch + 1) % (num_epoch/10) == 0:
           print(f"Epoch {epoch+1:2d}/{num_epoch:2d} | "
-              f"Train - Acc: {train_acc:.2f} | IoU: {train_IOU:.3f} | Depth MAE: {train_MAE:.3f} | Lane Acc: {train_lane_MAE:.3f} || "
+              f"Train - Acc: {train_acc:.2f} | IoU: {train_IOU:.3f} | Depth MAE: {train_MAE:.3f} | Lane Acc: {train_lane_MAE:.3f} || ",
               f"Val --- Acc: {val_acc:.2f} | IoU: {val_IOU:.3f} | Depth MAE: {val_MAE:.3f} | Lane Acc: {val_lane_MAE:.3f} || ")
 
     # save model
