@@ -312,7 +312,7 @@ class Detector(torch.nn.Module):
         pred = logits.argmax(dim=1)
 
         # Optional additional post-processing for depth only if needed
-        depth = raw_depth
+        depth = raw_depth.squeeze(1)
 
         return pred, depth
 
